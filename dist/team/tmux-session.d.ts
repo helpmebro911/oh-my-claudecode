@@ -63,6 +63,11 @@ export declare function createTeamSession(teamName: string, workerCount: number,
 export declare function spawnWorkerInPane(sessionName: string, paneId: string, config: WorkerPaneConfig): Promise<void>;
 export declare function paneHasActiveTask(captured: string): boolean;
 export declare function paneLooksReady(captured: string): boolean;
+export interface WaitForPaneReadyOptions {
+    timeoutMs?: number;
+    pollIntervalMs?: number;
+}
+export declare function waitForPaneReady(paneId: string, opts?: WaitForPaneReadyOptions): Promise<boolean>;
 export declare function shouldAttemptAdaptiveRetry(args: {
     paneBusy: boolean;
     latestCapture: string | null;

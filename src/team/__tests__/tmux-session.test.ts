@@ -159,6 +159,24 @@ describe('buildWorkerStartCommand', () => {
 
     expect(cmd).toContain('/home/tester/.bashrc');
   });
+
+  it('disables rc sourcing when OMC_LOAD_SHELL_RC=0', () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+    vi.stubEnv('SHELL', '/bin/zsh');
+    vi.stubEnv('HOME', '/home/tester');
+    vi.stubEnv('OMC_LOAD_SHELL_RC', '0');
+
+    const cmd = buildWorkerStartCommand({
+      teamName: 't',
+      workerName: 'w',
+      envVars: { A: '1' },
+      launchCmd: 'node app.js',
+      cwd: '/tmp'
+    });
+
+    expect(cmd).toContain("env A='1' /bin/zsh -c");
+    expect(cmd).not.toContain('source "/home/tester/.zshrc"');
+  });
 });
 
 describe('shouldAttemptAdaptiveRetry', () => {

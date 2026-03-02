@@ -74,6 +74,11 @@ function shellNameFromPath(shellPath: string): string {
   const shellName = basename(shellPath.replace(/\\/g, '/'));
   return shellName.replace(/\.(exe|cmd|bat)$/i, '');
 }
+
+function shouldLoadShellRc(): boolean {
+  return process.env.OMC_LOAD_SHELL_RC !== '0';
+}
+
 function shellEscape(value: string): string {
   return `'${value.replace(/'/g, `'\"'\"'`)}'`;
 }
@@ -127,7 +132,7 @@ export function buildWorkerStartCommand(config: WorkerPaneConfig): string {
 
     const shellName = shellNameFromPath(shell) || 'bash';
     const rcFile = process.env.HOME ? `${process.env.HOME}/.${shellName}rc` : '';
-    const script = rcFile
+    const script = shouldLoadShellRc() && rcFile
       ? `[ -f ${shellEscape(rcFile)} ] && . ${shellEscape(rcFile)}; exec "$@"`
       : 'exec "$@"';
 
@@ -152,7 +157,7 @@ export function buildWorkerStartCommand(config: WorkerPaneConfig): string {
   const shellName = shellNameFromPath(shell) || 'bash';
   const rcFile = process.env.HOME ? `${process.env.HOME}/.${shellName}rc` : '';
   // Quote rcFile to prevent shell injection if HOME contains metacharacters
-  const sourceCmd = rcFile ? `[ -f "${rcFile}" ] && source "${rcFile}"; ` : '';
+  const sourceCmd = shouldLoadShellRc() && rcFile ? `[ -f "${rcFile}" ] && source "${rcFile}"; ` : '';
 
   return `env ${envString} ${shell} -c "${sourceCmd}exec ${launchWords[0]}"`;
 }
@@ -433,7 +438,9 @@ function normalizeTmuxCapture(value: string): string {
   return value.replace(/\r/g, '').replace(/\s+/g, ' ').trim();
 }
 
-async function capturePaneAsync(paneId: string, execFileAsync: (cmd: string, args: string[]) => Promise<{ stdout: string }>): Promise<string> {
+type ExecFileAsyncFn = (cmd: string, args: string[]) => Promise<{ stdout: string; stderr: string }>;
+
+async function capturePaneAsync(paneId: string, execFileAsync: ExecFileAsyncFn): Promise<string> {
   try {
     const result = await execFileAsync('tmux', ['capture-pane', '-t', paneId, '-p', '-S', '-80']);
     return result.stdout;
@@ -466,7 +473,7 @@ export function paneLooksReady(captured: string): boolean {
   if (lines.length === 0) return false;
 
   const tail = lines.slice(-20);
-  const hasPrompt = tail.some(line => /^\s*[›>❯]\s*/u.test(line));
+  const hasPrompt = tail.some(line => /^\s*[›>❯$#%>]\s*/u.test(line));
   if (hasPrompt) return true;
 
   const hasCodexHint = tail.some(
@@ -475,14 +482,48 @@ export function paneLooksReady(captured: string): boolean {
   return hasCodexHint;
 }
 
+export interface WaitForPaneReadyOptions {
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+}
+
+export async function waitForPaneReady(
+  paneId: string,
+  opts: WaitForPaneReadyOptions = {}
+): Promise<boolean> {
+  const { execFile } = await import('child_process');
+  const { promisify } = await import('util');
+  const execFileAsync = promisify(execFile);
+
+  const envTimeout = Number.parseInt(process.env.OMC_SHELL_READY_TIMEOUT_MS ?? '', 10);
+  const timeoutMs = Number.isFinite(opts.timeoutMs) && (opts.timeoutMs ?? 0) > 0
+    ? Number(opts.timeoutMs)
+    : (Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : 10_000);
+  const pollIntervalMs = Number.isFinite(opts.pollIntervalMs) && (opts.pollIntervalMs ?? 0) > 0
+    ? Number(opts.pollIntervalMs)
+    : 250;
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const captured = await capturePaneAsync(paneId, execFileAsync as never);
+    if (paneLooksReady(captured) && !paneHasActiveTask(captured)) {
+      return true;
+    }
+    await sleep(pollIntervalMs);
+  }
+
+  console.warn(
+    `[tmux-session] waitForPaneReady: pane ${paneId} timed out after ${timeoutMs}ms ` +
+    `(set OMC_SHELL_READY_TIMEOUT_MS to tune)`
+  );
+  return false;
+}
+
 function paneTailContainsLiteralLine(captured: string, text: string): boolean {
   return normalizeTmuxCapture(captured).includes(normalizeTmuxCapture(text));
 }
 
-async function paneInCopyMode(
-  paneId: string,
-  execFileAsync: (cmd: string, args: string[]) => Promise<{ stdout: string }>
-): Promise<boolean> {
+async function paneInCopyMode(paneId: string): Promise<boolean> {
   try {
     const result = await tmuxAsync(['display-message', '-t', paneId, '-p', '#{pane_in_mode}']);
     return result.stdout.trim() === '1';
@@ -536,7 +577,7 @@ export async function sendToWorker(
     };
 
     // Guard: copy-mode captures keys; skip injection entirely.
-    if (await paneInCopyMode(paneId, execFileAsync as never)) {
+    if (await paneInCopyMode(paneId)) {
       return false;
     }
 
@@ -581,13 +622,13 @@ export async function sendToWorker(
     }
 
     // Safety gate: copy-mode can turn on while we retry; never send fallback control keys when active.
-    if (await paneInCopyMode(paneId, execFileAsync as never)) {
+    if (await paneInCopyMode(paneId)) {
       return false;
     }
 
     // Adaptive fallback: for busy panes, retry once without interrupting active turns.
     const finalCapture = await capturePaneAsync(paneId, execFileAsync as never);
-    const paneModeBeforeAdaptiveRetry = await paneInCopyMode(paneId, execFileAsync as never);
+    const paneModeBeforeAdaptiveRetry = await paneInCopyMode(paneId);
     if (shouldAttemptAdaptiveRetry({
       paneBusy,
       latestCapture: finalCapture,
@@ -595,12 +636,12 @@ export async function sendToWorker(
       paneInCopyMode: paneModeBeforeAdaptiveRetry,
       retriesAttempted: 0,
     })) {
-      if (await paneInCopyMode(paneId, execFileAsync as never)) {
+      if (await paneInCopyMode(paneId)) {
         return false;
       }
       await sendKey('C-u');
       await sleep(80);
-      if (await paneInCopyMode(paneId, execFileAsync as never)) {
+      if (await paneInCopyMode(paneId)) {
         return false;
       }
       await execFileAsync('tmux', ['send-keys', '-t', paneId, '-l', '--', message]);
@@ -617,7 +658,7 @@ export async function sendToWorker(
     }
 
     // Before fallback control keys, re-check copy-mode to avoid mutating scrollback UI state.
-    if (await paneInCopyMode(paneId, execFileAsync as never)) {
+    if (await paneInCopyMode(paneId)) {
       return false;
     }
 
@@ -652,7 +693,7 @@ export async function injectToLeaderPane(
     const { execFile } = await import('child_process');
     const { promisify } = await import('util');
     const execFileAsync = promisify(execFile);
-    if (await paneInCopyMode(leaderPaneId, execFileAsync as never)) {
+    if (await paneInCopyMode(leaderPaneId)) {
       return false;
     }
     const captured = await capturePaneAsync(leaderPaneId, execFileAsync as never);

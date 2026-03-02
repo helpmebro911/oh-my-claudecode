@@ -16,6 +16,8 @@ export interface WorkerLaunchConfig {
     model?: string;
     cwd: string;
     extraFlags?: string[];
+    /** Optional explicit binary path/name override */
+    launchBinary?: string;
 }
 /** @deprecated Backward-compat shim for older team API consumers. */
 export interface CliBinaryValidation {
@@ -28,7 +30,7 @@ declare function getTrustedPrefixes(): string[];
 /** @deprecated Backward-compat shim; non-interactive shells should generally skip RC files. */
 export declare function shouldLoadShellRc(): boolean;
 /** @deprecated Backward-compat shim retained for API compatibility. */
-export declare function resolveCliBinaryPath(binary: string): string;
+export declare function resolveCliBinaryPath(binaryOrPath: string): string;
 /** @deprecated Backward-compat shim retained for API compatibility. */
 export declare function clearResolvedPathCache(): void;
 /** @deprecated Backward-compat shim retained for API compatibility. */

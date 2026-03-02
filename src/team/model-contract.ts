@@ -1,5 +1,5 @@
 import { spawnSync } from 'child_process';
-import { isAbsolute, normalize, win32 as win32Path } from 'path';
+import { delimiter, isAbsolute, normalize, win32 as win32Path } from 'path';
 import { validateTeamName } from './team-name.js';
 
 export type CliAgentType = 'claude' | 'codex' | 'gemini';
@@ -22,6 +22,8 @@ export interface WorkerLaunchConfig {
   model?: string;
   cwd: string;
   extraFlags?: string[];
+  /** Optional explicit binary path/name override */
+  launchBinary?: string;
 }
 
 /** @deprecated Backward-compat shim for older team API consumers. */
@@ -35,10 +37,15 @@ export interface CliBinaryValidation {
 const resolvedPathCache = new Map<string, string>();
 
 const UNTRUSTED_PATH_PATTERNS: RegExp[] = [
-  /^\/tmp(\/|$)/,
-  /^\/var\/tmp(\/|$)/,
-  /^\/dev\/shm(\/|$)/,
+  /^\/tmp(\/|$)/i,
+  /^\/var\/tmp(\/|$)/i,
+  /^\/dev\/shm(\/|$)/i,
+  /\/appdata\/local\/temp(\/|$)/i,
 ];
+
+function normalizeForTrust(pathValue: string): string {
+  return normalize(pathValue).replace(/\\/g, '/');
+}
 
 function getTrustedPrefixes(): string[] {
   const trusted = [
@@ -55,18 +62,25 @@ function getTrustedPrefixes(): string[] {
   }
 
   const custom = (process.env.OMC_TRUSTED_CLI_DIRS ?? '')
-    .split(':')
-    .map(part => part.trim())
+    .split(delimiter)
+    .map((part) => part.trim())
     .filter(Boolean)
-    .filter(part => isAbsolute(part));
+    .filter((part) => isAbsolute(part));
 
   trusted.push(...custom);
-  return trusted;
+  return trusted.map(normalizeForTrust);
 }
 
-function isTrustedPrefix(resolvedPath: string): boolean {
-  const normalized = normalize(resolvedPath);
-  return getTrustedPrefixes().some(prefix => normalized.startsWith(normalize(prefix)));
+function isTrustedPath(resolvedPath: string): boolean {
+  const normalizedPath = normalizeForTrust(resolvedPath);
+  const candidate = process.platform === 'win32' ? normalizedPath.toLowerCase() : normalizedPath;
+
+  const prefixes = getTrustedPrefixes().map((prefix) => {
+    const normalized = prefix.endsWith('/') ? prefix : `${prefix}/`;
+    return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+  });
+
+  return prefixes.some((prefix) => candidate === prefix.slice(0, -1) || candidate.startsWith(prefix));
 }
 
 function assertBinaryName(binary: string): void {
@@ -75,48 +89,55 @@ function assertBinaryName(binary: string): void {
   }
 }
 
+function isAbsoluteCliPath(pathValue: string): boolean {
+  return isAbsolute(pathValue) || win32Path.isAbsolute(pathValue);
+}
+
 /** @deprecated Backward-compat shim; non-interactive shells should generally skip RC files. */
 export function shouldLoadShellRc(): boolean {
   return false;
 }
 
 /** @deprecated Backward-compat shim retained for API compatibility. */
-export function resolveCliBinaryPath(binary: string): string {
-  assertBinaryName(binary);
-  const cached = resolvedPathCache.get(binary);
+export function resolveCliBinaryPath(binaryOrPath: string): string {
+  const cached = resolvedPathCache.get(binaryOrPath);
   if (cached) return cached;
 
-  const finder = process.platform === 'win32' ? 'where' : 'which';
-  const result = spawnSync(finder, [binary], {
-    timeout: 5000,
-    env: process.env,
-  });
+  let resolved = '';
 
-  if (result.status !== 0) {
-    throw new Error(`CLI binary '${binary}' not found in PATH`);
+  if (isAbsoluteCliPath(binaryOrPath)) {
+    resolved = normalize(binaryOrPath);
+  } else {
+    assertBinaryName(binaryOrPath);
+    const finder = process.platform === 'win32' ? 'where' : 'which';
+    const result = spawnSync(finder, [binaryOrPath], {
+      timeout: 5000,
+      env: process.env,
+    });
+
+    const stdout = result.stdout?.toString().trim() ?? '';
+    const firstLine = stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? '';
+    if (result.status !== 0 || !firstLine) {
+      throw new Error(`CLI binary '${binaryOrPath}' not found in PATH`);
+    }
+    resolved = normalize(firstLine);
   }
 
-  const stdout = result.stdout?.toString().trim() ?? '';
-  const firstLine = stdout.split('\n').map(line => line.trim()).find(Boolean) ?? '';
-  if (!firstLine) {
-    throw new Error(`CLI binary '${binary}' not found in PATH`);
+  if (!isAbsoluteCliPath(resolved)) {
+    throw new Error(`Resolved CLI binary is a relative path: ${resolved}`);
   }
 
-  const resolvedPath = normalize(firstLine);
-  if (!isAbsolute(resolvedPath)) {
-    throw new Error(`Resolved CLI binary '${binary}' to relative path`);
+  const normalized = normalizeForTrust(resolved);
+  if (UNTRUSTED_PATH_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    throw new Error(`Resolved CLI binary is in an untrusted location: ${resolved}`);
   }
 
-  if (UNTRUSTED_PATH_PATTERNS.some(pattern => pattern.test(resolvedPath))) {
-    throw new Error(`Resolved CLI binary '${binary}' to untrusted location: ${resolvedPath}`);
+  if (!isTrustedPath(resolved)) {
+    console.warn(`[omc:cli-security] CLI binary resolved from non-standard location: ${resolved}`);
   }
 
-  if (!isTrustedPrefix(resolvedPath)) {
-    console.warn(`[omc:cli-security] CLI binary '${binary}' resolved to non-standard path: ${resolvedPath}`);
-  }
-
-  resolvedPathCache.set(binary, resolvedPath);
-  return resolvedPath;
+  resolvedPathCache.set(binaryOrPath, resolved);
+  return resolved;
 }
 
 /** @deprecated Backward-compat shim retained for API compatibility. */
@@ -274,14 +295,14 @@ export function buildLaunchArgs(agentType: CliAgentType, config: WorkerLaunchCon
 export function buildWorkerArgv(agentType: CliAgentType, config: WorkerLaunchConfig): string[] {
   validateTeamName(config.teamName);
   const contract = getContract(agentType);
-  const binary = resolveBinaryPath(contract.binary);
   const args = buildLaunchArgs(agentType, config);
+  const binary = resolveCliBinaryPath(config.launchBinary ?? contract.binary);
   return [binary, ...args];
 }
 
 export function buildWorkerCommand(agentType: CliAgentType, config: WorkerLaunchConfig): string {
   return buildWorkerArgv(agentType, config)
-    .map((part) => `'${part.replace(/'/g, `'\"'\"'`)}'`)
+    .map((part) => `'${part.replace(/'/g, `'"'"'`)}'`)
     .join(' ');
 }
 

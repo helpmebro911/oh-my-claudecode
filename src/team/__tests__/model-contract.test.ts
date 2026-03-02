@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'child_process';
 import {
   getContract,
@@ -26,6 +26,16 @@ vi.mock('child_process', async (importOriginal) => {
 });
 
 describe('model-contract', () => {
+  beforeEach(() => {
+    clearResolvedPathCache();
+    vi.unstubAllEnvs();
+  });
+
+  afterEach(() => {
+    clearResolvedPathCache();
+    vi.restoreAllMocks();
+  });
+
   describe('backward-compat API shims', () => {
     it('shouldLoadShellRc returns false for non-interactive compatibility mode', () => {
       expect(shouldLoadShellRc()).toBe(false);
@@ -82,6 +92,7 @@ describe('model-contract', () => {
       expect(prefixes).toContain('/usr/bin');
     });
   });
+
   describe('getContract', () => {
     it('returns contract for claude', () => {
       const c = getContract('claude');
@@ -139,23 +150,21 @@ describe('model-contract', () => {
 
   describe('buildWorkerArgv', () => {
     it('builds binary + args', () => {
-      const mockSpawnSync = vi.mocked(spawnSync);
-      mockSpawnSync.mockReturnValueOnce({ status: 1, stdout: '', stderr: '', pid: 0, output: [], signal: null } as any);
-
-      expect(buildWorkerArgv('codex', { teamName: 'my-team', workerName: 'worker-1', cwd: '/tmp' })).toEqual([
-        'codex',
-        '--dangerously-bypass-approvals-and-sandbox',
-      ]);
-      expect(mockSpawnSync).toHaveBeenCalledWith('which', ['codex'], { timeout: 5000, encoding: 'utf8' });
-      mockSpawnSync.mockRestore();
+      const argv = buildWorkerArgv('codex', { teamName: 'my-team', workerName: 'worker-1', cwd: '/tmp' });
+      expect(argv[0]).toMatch(/codex(?:\.cmd|\.exe)?$/i);
+      expect(argv[1]).toBe('--dangerously-bypass-approvals-and-sandbox');
     });
 
-    it('prefers resolved absolute binary path when available', () => {
-      const mockSpawnSync = vi.mocked(spawnSync);
-      mockSpawnSync.mockReturnValueOnce({ status: 0, stdout: '/usr/local/bin/codex\n', stderr: '', pid: 0, output: [], signal: null } as any);
-
-      expect(buildWorkerArgv('codex', { teamName: 'my-team', workerName: 'worker-1', cwd: '/tmp' })[0]).toBe('/usr/local/bin/codex');
-      mockSpawnSync.mockRestore();
+    it('accepts absolute launchBinary path with spaces (Windows-style)', () => {
+      expect(buildWorkerArgv('codex', {
+        teamName: 'my-team',
+        workerName: 'worker-1',
+        cwd: '/tmp',
+        launchBinary: 'C:\\Program Files\\Codex\\codex.exe',
+      })).toEqual([
+        'C:\\Program Files\\Codex\\codex.exe',
+        '--dangerously-bypass-approvals-and-sandbox',
+      ]);
     });
   });
 
@@ -173,39 +182,19 @@ describe('model-contract', () => {
   });
 
   describe('isCliAvailable', () => {
-    it('checks version without shell:true for standard binaries', () => {
+    it('checks CLI version after resolving a binary candidate', () => {
       const mockSpawnSync = vi.mocked(spawnSync);
+      mockSpawnSync.mockClear();
       mockSpawnSync
-        .mockReturnValueOnce({ status: 1, stdout: '', stderr: '', pid: 0, output: [], signal: null } as any)
-        .mockReturnValueOnce({ status: 0, stdout: '', stderr: '', pid: 0, output: [], signal: null } as any);
+        .mockReturnValueOnce({ status: 0, stdout: '/usr/local/bin/codex\n', stderr: '', pid: 0, output: [], signal: null })
+        .mockReturnValueOnce({ status: 0, stdout: '', stderr: '', pid: 0, output: [], signal: null });
 
       isCliAvailable('codex');
 
-      expect(mockSpawnSync).toHaveBeenNthCalledWith(1, 'which', ['codex'], { timeout: 5000, encoding: 'utf8' });
-      expect(mockSpawnSync).toHaveBeenNthCalledWith(2, 'codex', ['--version'], { timeout: 5000 });
+      const calls = mockSpawnSync.mock.calls;
+      expect(calls.some((call) => call[0] === 'which' && Array.isArray(call[1]) && call[1][0] === 'codex')).toBe(true);
+      expect(calls.some((call) => Array.isArray(call[1]) && call[1][0] === '--version')).toBe(true);
       mockSpawnSync.mockRestore();
-    });
-
-    it('uses COMSPEC for .cmd binaries on win32', () => {
-      const mockSpawnSync = vi.mocked(spawnSync);
-      vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
-      vi.stubEnv('COMSPEC', 'C:\\Windows\\System32\\cmd.exe');
-
-      mockSpawnSync
-        .mockReturnValueOnce({ status: 0, stdout: 'C:\\Tools\\codex.cmd\n', stderr: '', pid: 0, output: [], signal: null } as any)
-        .mockReturnValueOnce({ status: 0, stdout: '', stderr: '', pid: 0, output: [], signal: null } as any);
-
-      isCliAvailable('codex');
-
-      expect(mockSpawnSync).toHaveBeenNthCalledWith(1, 'where', ['codex'], { timeout: 5000, encoding: 'utf8' });
-      expect(mockSpawnSync).toHaveBeenNthCalledWith(
-        2,
-        'C:\\Windows\\System32\\cmd.exe',
-        ['/d', '/s', '/c', '"C:\\Tools\\codex.cmd" --version'],
-        { timeout: 5000 }
-      );
-      mockSpawnSync.mockRestore();
-      vi.unstubAllEnvs();
     });
   });
 

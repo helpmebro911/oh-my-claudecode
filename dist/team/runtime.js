@@ -3,9 +3,46 @@ import { join } from 'path';
 import { existsSync } from 'fs';
 import { buildWorkerArgv, validateCliAvailable, getWorkerEnv as getModelWorkerEnv, isPromptModeAgent, getPromptModeArgs } from './model-contract.js';
 import { validateTeamName } from './team-name.js';
-import { createTeamSession, spawnWorkerInPane, sendToWorker, isWorkerAlive, killTeamSession, } from './tmux-session.js';
+import { createTeamSession, spawnWorkerInPane, sendToWorker, isWorkerAlive, killTeamSession, waitForPaneReady, } from './tmux-session.js';
 import { composeInitialInbox, ensureWorkerStateDir, writeWorkerOverlay, } from './worker-bootstrap.js';
 import { withTaskLock, writeTaskFailure, DEFAULT_MAX_TASK_RETRIES, } from './task-file-ops.js';
+function isValidDoneSignal(value) {
+    if (!value || typeof value !== 'object')
+        return false;
+    const signal = value;
+    if (signal.status !== 'completed' && signal.status !== 'failed')
+        return false;
+    if (typeof signal.summary !== 'string')
+        return false;
+    if (typeof signal.completedAt !== 'string')
+        return false;
+    if (typeof signal.taskId !== 'string' || signal.taskId.length === 0)
+        return false;
+    return true;
+}
+async function readDoneSignalWithRecovery(donePath) {
+    let raw;
+    try {
+        raw = await readFile(donePath, 'utf-8');
+    }
+    catch {
+        return { signal: null, malformed: false };
+    }
+    try {
+        const parsed = JSON.parse(raw);
+        if (!isValidDoneSignal(parsed)) {
+            const quarantined = `${donePath}.bad-${Date.now()}`;
+            await rename(donePath, quarantined).catch(() => undefined);
+            return { signal: null, malformed: true };
+        }
+        return { signal: parsed, malformed: false };
+    }
+    catch {
+        const quarantined = `${donePath}.bad-${Date.now()}`;
+        await rename(donePath, quarantined).catch(() => undefined);
+        return { signal: null, malformed: true };
+    }
+}
 function workerName(index) {
     return `worker-${index + 1}`;
 }
@@ -343,17 +380,21 @@ export function watchdogCliWorkers(runtime, intervalMs) {
                 return;
             const root = stateRoot(runtime.cwd, runtime.teamName);
             // Collect done signals and alive checks in parallel to avoid O(N×300ms) sequential tmux calls.
-            const [doneSignals, aliveResults] = await Promise.all([
+            const [doneReads, aliveResults] = await Promise.all([
                 Promise.all(workers.map(([wName]) => {
                     const donePath = join(root, 'workers', wName, 'done.json');
-                    return readJsonSafe(donePath);
+                    return readDoneSignalWithRecovery(donePath);
                 })),
                 Promise.all(workers.map(([, active]) => isWorkerAlive(active.paneId))),
             ]);
             for (let i = 0; i < workers.length; i++) {
                 const [wName, active] = workers[i];
                 const donePath = join(root, 'workers', wName, 'done.json');
-                const signal = doneSignals[i];
+                const doneRead = doneReads[i];
+                const signal = doneRead.signal;
+                if (doneRead.malformed) {
+                    console.warn(`[watchdog] recovered malformed done.json for ${wName}; quarantined bad payload`);
+                }
                 // Process done.json first if present
                 if (signal) {
                     unresponsiveCounts.delete(wName);
@@ -528,9 +569,14 @@ export async function spawnWorkerForTask(runtime, workerNameValue, taskIndex) {
         // panes tracking is best-effort
     }
     if (!usePromptMode) {
-        // Interactive mode: wait for CLI startup, handle trust-confirm, then
+        // Interactive mode: wait for pane readiness, handle trust-confirm, then
         // send instruction via tmux send-keys.
-        await new Promise(r => setTimeout(r, 4000));
+        const paneReady = await waitForPaneReady(paneId);
+        if (!paneReady) {
+            await killWorkerPane(runtime, workerNameValue, paneId);
+            await resetTaskToPending(root, taskId, runtime.teamName, runtime.cwd);
+            throw new Error(`worker_pane_not_ready:${workerNameValue}`);
+        }
         if (agentType === 'gemini') {
             const confirmed = await notifyPaneWithRetry(runtime.sessionName, paneId, '1');
             if (!confirmed) {

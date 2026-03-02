@@ -6,7 +6,7 @@ import { buildWorkerArgv, validateCliAvailable, getWorkerEnv as getModelWorkerEn
 import { validateTeamName } from './team-name.js';
 import {
   createTeamSession, spawnWorkerInPane, sendToWorker,
-  isWorkerAlive, killTeamSession,
+  isWorkerAlive, killTeamSession, waitForPaneReady,
   type TeamSession, type WorkerPaneConfig,
 } from './tmux-session.js';
 import {
@@ -78,6 +78,44 @@ interface DoneSignal {
   status: 'completed' | 'failed';
   summary: string;
   completedAt: string;
+}
+
+interface DoneFileReadResult {
+  signal: DoneSignal | null;
+  malformed: boolean;
+}
+
+function isValidDoneSignal(value: unknown): value is DoneSignal {
+  if (!value || typeof value !== 'object') return false;
+  const signal = value as Partial<DoneSignal>;
+  if (signal.status !== 'completed' && signal.status !== 'failed') return false;
+  if (typeof signal.summary !== 'string') return false;
+  if (typeof signal.completedAt !== 'string') return false;
+  if (typeof signal.taskId !== 'string' || signal.taskId.length === 0) return false;
+  return true;
+}
+
+async function readDoneSignalWithRecovery(donePath: string): Promise<DoneFileReadResult> {
+  let raw: string;
+  try {
+    raw = await readFile(donePath, 'utf-8');
+  } catch {
+    return { signal: null, malformed: false };
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!isValidDoneSignal(parsed)) {
+      const quarantined = `${donePath}.bad-${Date.now()}`;
+      await rename(donePath, quarantined).catch(() => undefined);
+      return { signal: null, malformed: true };
+    }
+    return { signal: parsed, malformed: false };
+  } catch {
+    const quarantined = `${donePath}.bad-${Date.now()}`;
+    await rename(donePath, quarantined).catch(() => undefined);
+    return { signal: null, malformed: true };
+  }
 }
 
 interface TeamTaskRecord {
@@ -489,10 +527,10 @@ export function watchdogCliWorkers(runtime: TeamRuntime, intervalMs: number): ()
       const root = stateRoot(runtime.cwd, runtime.teamName);
 
       // Collect done signals and alive checks in parallel to avoid O(N×300ms) sequential tmux calls.
-      const [doneSignals, aliveResults] = await Promise.all([
+      const [doneReads, aliveResults] = await Promise.all([
         Promise.all(workers.map(([wName]) => {
           const donePath = join(root, 'workers', wName, 'done.json');
-          return readJsonSafe<DoneSignal>(donePath);
+          return readDoneSignalWithRecovery(donePath);
         })),
         Promise.all(workers.map(([, active]) => isWorkerAlive(active.paneId))),
       ]);
@@ -500,7 +538,12 @@ export function watchdogCliWorkers(runtime: TeamRuntime, intervalMs: number): ()
       for (let i = 0; i < workers.length; i++) {
         const [wName, active] = workers[i];
         const donePath = join(root, 'workers', wName, 'done.json');
-        const signal = doneSignals[i];
+        const doneRead = doneReads[i];
+        const signal = doneRead.signal;
+
+        if (doneRead.malformed) {
+          console.warn(`[watchdog] recovered malformed done.json for ${wName}; quarantined bad payload`);
+        }
 
         // Process done.json first if present
         if (signal) {
@@ -687,9 +730,15 @@ export async function spawnWorkerForTask(
   }
 
   if (!usePromptMode) {
-    // Interactive mode: wait for CLI startup, handle trust-confirm, then
+    // Interactive mode: wait for pane readiness, handle trust-confirm, then
     // send instruction via tmux send-keys.
-    await new Promise(r => setTimeout(r, 4000));
+    const paneReady = await waitForPaneReady(paneId);
+    if (!paneReady) {
+      await killWorkerPane(runtime, workerNameValue, paneId);
+      await resetTaskToPending(root, taskId, runtime.teamName, runtime.cwd);
+      throw new Error(`worker_pane_not_ready:${workerNameValue}`);
+    }
+
     if (agentType === 'gemini') {
       const confirmed = await notifyPaneWithRetry(runtime.sessionName, paneId, '1');
       if (!confirmed) {
