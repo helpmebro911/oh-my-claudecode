@@ -113,11 +113,11 @@ describe('model-contract', () => {
       expect(args).not.toContain('--full-auto');
       expect(args).toContain('--dangerously-bypass-approvals-and-sandbox');
     });
-    it('gemini includes --approval-mode yolo -i', () => {
+    it('gemini includes --approval-mode yolo', () => {
       const args = buildLaunchArgs('gemini', { teamName: 't', workerName: 'w', cwd: '/tmp' });
       expect(args).toContain('--approval-mode');
       expect(args).toContain('yolo');
-      expect(args).toContain('-i');
+      expect(args).not.toContain('-i');
     });
     it('passes model flag when specified', () => {
       const args = buildLaunchArgs('codex', { teamName: 't', workerName: 'w', cwd: '/tmp', model: 'gpt-4' });
