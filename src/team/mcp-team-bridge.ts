@@ -527,7 +527,7 @@ function spawnCliProcess(
     ];
   } else {
     cmd = "gemini";
-    args = ["--yolo"];
+    args = ["--approval-mode", "yolo", "-i"];
     if (model) args.push("--model", model);
   }
 

@@ -200,7 +200,7 @@ const CONTRACTS: Record<CliAgentType, CliAgentContract> = {
     supportsPromptMode: true,
     promptModeFlag: '-p',
     buildLaunchArgs(model?: string, extraFlags: string[] = []): string[] {
-      const args = ['--yolo'];
+      const args = ['--approval-mode', 'yolo', '-i'];
       if (model) args.push('--model', model);
       return [...args, ...extraFlags];
     },
