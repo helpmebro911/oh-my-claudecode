@@ -252,6 +252,64 @@ describe('omc ask command', () => {
     }
   });
 
+  it('allows codex ask inside a Claude Code session', () => {
+    const wd = mkdtempSync(join(tmpdir(), 'omc-ask-cli-codex-nested-'));
+    try {
+      const stubPath = writeAdvisorStub(wd);
+      const result = runCli(
+        ['ask', 'codex', '--prompt', 'cli nested codex prompt'],
+        wd,
+        {
+          OMC_ASK_ADVISOR_SCRIPT: stubPath,
+          CLAUDECODE: '1',
+        },
+        { preserveClaudeSessionEnv: true },
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(0);
+      expect(result.stderr).not.toContain('Nested launches are not supported');
+
+      const payload = JSON.parse(result.stdout);
+      expect(payload).toEqual({
+        provider: 'codex',
+        prompt: 'cli nested codex prompt',
+        originalTask: 'cli nested codex prompt',
+        passthrough: null,
+      });
+    } finally {
+      rmSync(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('allows gemini ask inside a Claude Code session', () => {
+    const wd = mkdtempSync(join(tmpdir(), 'omc-ask-cli-gemini-nested-'));
+    try {
+      const stubPath = writeAdvisorStub(wd);
+      const result = runCli(
+        ['ask', 'gemini', '--prompt', 'cli nested gemini prompt'],
+        wd,
+        {
+          OMC_ASK_ADVISOR_SCRIPT: stubPath,
+          CLAUDECODE: '1',
+        },
+        { preserveClaudeSessionEnv: true },
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(0);
+      expect(result.stderr).not.toContain('Nested launches are not supported');
+
+      const payload = JSON.parse(result.stdout);
+      expect(payload.provider).toBe('gemini');
+      expect(payload.prompt).toBe('cli nested gemini prompt');
+      expect(payload.originalTask).toBe('cli nested gemini prompt');
+      expect(payload.passthrough).toBeNull();
+    } finally {
+      rmSync(wd, { recursive: true, force: true });
+    }
+  });
+
   it('loads --agent-prompt role from resolved prompts dir and prepends role content', () => {
     const wd = mkdtempSync(join(tmpdir(), 'omc-ask-agent-prompt-'));
     try {
