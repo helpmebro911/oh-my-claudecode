@@ -683,7 +683,9 @@ async function checkTeamPipeline(
   // Missing, malformed, or unknown phases do not block (safety principle).
   const KNOWN_ACTIVE_PHASES = new Set(['team-plan', 'team-prd', 'team-exec', 'team-verify', 'team-fix']);
   if (typeof rawPhase !== 'string' || !KNOWN_ACTIVE_PHASES.has(rawPhase)) {
-    return null;
+    // Fail-open but still claim mode='team' so bridge.ts defers to this result
+    // instead of running its own team enforcement (which could falsely block).
+    return { shouldBlock: false, message: '', mode: 'team' };
   }
   const phase: string = rawPhase;
 
@@ -788,12 +790,22 @@ async function checkRalplan(
     return null;
   }
 
+  // Terminal phase detection — allow stop when ralplan has completed
+  const currentPhase = (state as unknown as Record<string, unknown>).current_phase;
+  if (typeof currentPhase === 'string') {
+    const terminal = ['complete', 'completed', 'failed', 'cancelled', 'done'];
+    if (terminal.includes(currentPhase.toLowerCase())) {
+      writeStopBreaker(workingDir, 'ralplan', 0, sessionId);
+      return { shouldBlock: false, message: '', mode: 'ralplan' };
+    }
+  }
+
   // Cancel-in-progress bypass
   if (cancelInProgress) {
     return {
       shouldBlock: false,
       message: '',
-      mode: 'none'
+      mode: 'ralplan'
     };
   }
 
@@ -804,7 +816,7 @@ async function checkRalplan(
     return {
       shouldBlock: false,
       message: `[RALPLAN CIRCUIT BREAKER] Stop enforcement exceeded ${RALPLAN_STOP_BLOCKER_MAX} reinforcements. Allowing stop to prevent infinite blocking.`,
-      mode: 'none'
+      mode: 'ralplan'
     };
   }
   writeStopBreaker(workingDir, 'ralplan', breakerCount, sessionId);

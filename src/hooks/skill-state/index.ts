@@ -95,7 +95,8 @@ const SKILL_PROTECTION: Record<string, SkillProtectionLevel> = {
   'code-review': 'medium',
   'security-review': 'medium',
   plan: 'medium',
-  ralplan: 'medium',
+  ralplan: 'none',  // Has first-class checkRalplan() enforcement; no skill-active needed
+  'deep-interview': 'heavy',
   review: 'medium',
   'external-context': 'medium',
   sciomc: 'medium',

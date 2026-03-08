@@ -1366,6 +1366,11 @@ async function processPostToolUse(input: HookInput): Promise<HookOutput> {
       const hook = createRalphLoopHook(directory);
       hook.startLoop(input.sessionId, cleanPrompt);
     }
+
+    // Clear skill-active state on skill completion to prevent false-blocking.
+    // Without this, every non-'none' skill falsely blocks stops until TTL expires.
+    const { clearSkillActiveState } = await import("./skill-state/index.js");
+    clearSkillActiveState(directory, input.sessionId);
   }
 
   // Run orchestrator post-tool processing (remember tags, verification reminders, etc.)
