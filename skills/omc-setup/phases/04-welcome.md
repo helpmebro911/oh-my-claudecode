@@ -50,11 +50,11 @@ Run /oh-my-claudecode:mcp-setup to add tools like web search, GitHub, etc.
 HUD STATUSLINE:
 The status bar now shows OMC state. Restart Claude Code to see it.
 
-CLI ANALYTICS (if installed):
-- omc           - Default analytics dashboard
-- omc cost      - View cost reports (daily/weekly/monthly)
-- omc sessions  - Inspect session history
-- omc backfill  - Import transcript analytics
+OMC CLI HELPERS (if installed):
+- omc hud         - Render the current HUD statusline
+- omc teleport    - Create an isolated git worktree
+- omc team status - Inspect a running team job
+- Session summaries are written to `.omc/sessions/*.json`
 
 That's it! Just use Claude Code normally.
 ```
@@ -91,11 +91,11 @@ Spawn coordinated agents with shared task lists and real-time messaging:
 HUD STATUSLINE:
 The status bar now shows OMC state. Restart Claude Code to see it.
 
-CLI ANALYTICS (if installed):
-- omc           - Default analytics dashboard
-- omc cost      - View cost reports (daily/weekly/monthly)
-- omc sessions  - Inspect session history
-- omc backfill  - Import transcript analytics
+OMC CLI HELPERS (if installed):
+- omc hud         - Render the current HUD statusline
+- omc teleport    - Create an isolated git worktree
+- omc team status - Inspect a running team job
+- Session summaries are written to `.omc/sessions/*.json`
 
 Your workflow won't break - it just got easier!
 ```
