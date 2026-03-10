@@ -96,7 +96,7 @@ echo "Default execution mode set to: USER_CHOICE"
 
 ## Step 2.5: Install OMC CLI Tool
 
-The OMC CLI (`omc` command) provides standalone monitoring and analytics commands.
+The OMC CLI (`omc` command) provides standalone helper commands such as `omc hud`, `omc teleport`, and `omc team ...`.
 
 First, check if the CLI is already installed:
 
@@ -114,7 +114,7 @@ If `OMC_CLI_INSTALLED` is `"true"`, skip the rest of this step.
 
 If `OMC_CLI_INSTALLED` is `"false"`, use AskUserQuestion:
 
-**Question:** "Would you like to install the OMC CLI globally for standalone monitoring and analytics? (`omc`, `omc cost`, `omc sessions`)"
+**Question:** "Would you like to install the OMC CLI globally for standalone helper commands? (`omc`, `omc hud`, `omc teleport`)"
 
 **Options:**
 1. **Yes (Recommended)** - Install `oh-my-claude-sisyphus` via `npm install -g`

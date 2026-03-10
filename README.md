@@ -246,14 +246,14 @@ omc wait --stop   # Disable daemon
 
 **Requires:** tmux (for session detection)
 
-### Monitoring & Analytics
+### Monitoring & Observability
 
-Use the HUD for live observability and `omc` for cost/session reporting:
+Use the HUD for live observability and the current session/replay artifacts for post-session inspection:
 
-- HUD analytics preset: `/oh-my-claudecode:hud setup` then set `"omcHud": { "preset": "analytics" }`
-- Cost reports: `omc cost daily|weekly|monthly`
-- Session history/backfill: `omc sessions`, `omc backfill`
-- Raw logs: `.omc/state/token-tracking.jsonl`, `.omc/state/agent-replay-*.jsonl`
+- HUD preset: `/oh-my-claudecode:hud setup` then use a supported preset such as `"omcHud": { "preset": "focused" }`
+- Session summaries: `.omc/sessions/*.json`
+- Replay logs: `.omc/state/agent-replay-*.jsonl`
+- Live HUD rendering: `omc hud`
 
 ### Notification Tags (Telegram/Discord/Slack)
 

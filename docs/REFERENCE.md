@@ -641,28 +641,27 @@ For complete documentation, see **[Performance Monitoring Guide](./PERFORMANCE-M
 | Feature                 | Description                                     | Access                               |
 | ----------------------- | ----------------------------------------------- | ------------------------------------ |
 | **Agent Observatory**   | Real-time agent status, efficiency, bottlenecks | HUD / API                            |
-| **Token Analytics**     | Cost tracking, usage reports, budget warnings   | HUD (`analytics` preset), `omc cost` |
+| **Session-End Summaries** | Persisted per-session summaries and callback payloads | `.omc/sessions/*.json`, `session-end` |
 | **Session Replay**      | Event timeline for post-session analysis        | `.omc/state/agent-replay-*.jsonl`    |
 | **Intervention System** | Auto-detection of stale agents, cost overruns   | Automatic                            |
 
 ### CLI Commands
 
 ```bash
-omc                # Default analytics dashboard
-omc cost daily     # Daily cost report
-omc cost weekly    # Weekly cost report
-omc backfill       # Import historical transcript data
-# Agent breakdown: use HUD observatory / replay logs
+omc hud                              # Render the current HUD statusline
+omc team status <team-name>          # Inspect a running team job
+tail -20 .omc/state/agent-replay-*.jsonl
+ls .omc/sessions/*.json
 ```
 
-### HUD Analytics Preset
+### HUD Presets
 
-Enable detailed cost tracking in your status line:
+Enable a supported preset for agent and context visibility in your status line:
 
 ```json
 {
   "omcHud": {
-    "preset": "analytics"
+    "preset": "focused"
   }
 }
 ```
