@@ -1,10 +1,11 @@
 import { execFileSync } from 'node:child_process';
 import { describe, it, expect } from 'vitest';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   isLaunchReadyEvaluatorCommand,
+  resolveAutoresearchDeepInterviewResult,
   writeAutoresearchDeepInterviewArtifacts,
   writeAutoresearchDraftArtifact,
 } from '../autoresearch-intake.js';
@@ -81,6 +82,50 @@ describe('autoresearch intake draft artifacts', () => {
       expect(resultJson.launchReady).toBe(true);
       expect(missionContent).toMatch(/Measure onboarding friction/);
       expect(sandboxContent).toMatch(/command: node scripts\/eval\.js/);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('throws a domain error when mission.md is missing from a persisted result', async () => {
+    const repo = await initRepo();
+    try {
+      const artifacts = await writeAutoresearchDeepInterviewArtifacts({
+        repoRoot: repo,
+        topic: 'Partial write test',
+        evaluatorCommand: 'node scripts/eval.js',
+        keepPolicy: 'score_improvement',
+        slug: 'partial-write',
+        seedInputs: { topic: 'Partial write test' },
+      });
+
+      await unlink(artifacts.missionArtifactPath);
+
+      await expect(
+        resolveAutoresearchDeepInterviewResult(repo, { slug: 'partial-write' }),
+      ).rejects.toThrow(/Missing mission artifact/);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('throws a domain error when sandbox.md is missing from a persisted result', async () => {
+    const repo = await initRepo();
+    try {
+      const artifacts = await writeAutoresearchDeepInterviewArtifacts({
+        repoRoot: repo,
+        topic: 'Partial write test',
+        evaluatorCommand: 'node scripts/eval.js',
+        keepPolicy: 'score_improvement',
+        slug: 'partial-sandbox',
+        seedInputs: { topic: 'Partial write test' },
+      });
+
+      await unlink(artifacts.sandboxArtifactPath);
+
+      await expect(
+        resolveAutoresearchDeepInterviewResult(repo, { slug: 'partial-sandbox' }),
+      ).rejects.toThrow(/Missing sandbox artifact/);
     } finally {
       await rm(repo, { recursive: true, force: true });
     }
