@@ -173,13 +173,20 @@ export function acquireFileLockSync(
   const handle = tryAcquireSync(lockPath, staleLockMs);
   if (handle || timeoutMs <= 0) return handle;
 
-  // Retry loop with Date.now() polling (Atomics.wait throws on the main thread)
+  // Retry loop — try Atomics.wait (works in Workers), fall back to spin for main thread
   const deadline = Date.now() + timeoutMs;
+  const sharedBuf = new SharedArrayBuffer(4);
+  const sharedArr = new Int32Array(sharedBuf);
 
   while (Date.now() < deadline) {
-    // Synchronous spin-wait for retryDelayMs (acceptable for short lock waits)
-    const waitUntil = Math.min(Date.now() + retryDelayMs, deadline);
-    while (Date.now() < waitUntil) { /* spin */ }
+    const waitMs = Math.min(retryDelayMs, deadline - Date.now());
+    try {
+      Atomics.wait(sharedArr, 0, 0, waitMs);
+    } catch {
+      // Main thread: Atomics.wait throws — brief spin instead (capped at retryDelayMs)
+      const waitUntil = Date.now() + waitMs;
+      while (Date.now() < waitUntil) { /* spin */ }
+    }
     const retryHandle = tryAcquireSync(lockPath, staleLockMs);
     if (retryHandle) return retryHandle;
   }

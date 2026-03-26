@@ -314,10 +314,9 @@ function isCredentialExpired(creds: OAuthCredentials): boolean {
 
 function readKeychainCredential(serviceName: string, account?: string): OAuthCredentials | null {
   try {
-    const args = ['find-generic-password', '-s', serviceName, '-w'];
-    if (account) {
-      args.splice(2, 0, '-a', account);
-    }
+    const args = account
+      ? ['find-generic-password', '-s', serviceName, '-a', account, '-w']
+      : ['find-generic-password', '-s', serviceName, '-w'];
     const result = execFileSync('/usr/bin/security', args, {
       encoding: 'utf-8',
       timeout: 2000,

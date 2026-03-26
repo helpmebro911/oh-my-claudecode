@@ -8,7 +8,7 @@ function validateGiteaUrl(raw: string): string | null {
     const host = u.hostname.toLowerCase();
     if (
       host === 'localhost' || host === '127.0.0.1' || host === '::1' ||
-      host === '0.0.0.0' || host === '[::1]' || host === '[::]' ||
+      host === '0.0.0.0' || host === '::' ||
       host.startsWith('169.254.') || host.endsWith('.local')
     ) return null;
     return u.origin;

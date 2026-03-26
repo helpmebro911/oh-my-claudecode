@@ -5,6 +5,7 @@
  */
 
 import { execSync } from 'node:child_process';
+import { resolve } from 'node:path';
 import { dim, cyan } from '../colors.js';
 
 const CACHE_TTL_MS = 30_000;
@@ -35,7 +36,7 @@ export function resetGitCache(): void {
  * @returns Repository name or null if not available
  */
 export function getGitRepoName(cwd?: string): string | null {
-  const key = cwd ?? '';
+  const key = cwd ? resolve(cwd) : process.cwd();
   const cached = repoCache.get(key);
   if (cached && Date.now() < cached.expiresAt) {
     return cached.value;
@@ -74,7 +75,7 @@ export function getGitRepoName(cwd?: string): string | null {
  * @returns Branch name or null if not available
  */
 export function getGitBranch(cwd?: string): string | null {
-  const key = cwd ?? '';
+  const key = cwd ? resolve(cwd) : process.cwd();
   const cached = branchCache.get(key);
   if (cached && Date.now() < cached.expiresAt) {
     return cached.value;

@@ -31,7 +31,7 @@ export function redactTokens(input: string): string {
     .replace(/(Bearer\s+)\S+/gi, '$1****')
     .replace(/(Bot\s+)\S+/gi, '$1****')
     // Anthropic API keys: sk-ant-api...
-    .replace(/\b(sk-ant-api[A-Za-z0-9-]*)[A-Za-z0-9_-]+/g, '$1****')
+    .replace(/\b(sk-ant-api)[A-Za-z0-9_-]+/g, '$1****')
     // GitHub tokens: ghp_, gho_, ghs_, github_pat_
     .replace(/\b(ghp_)[A-Za-z0-9]+/g, '$1****')
     .replace(/\b(gho_)[A-Za-z0-9]+/g, '$1****')
