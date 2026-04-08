@@ -7,7 +7,7 @@
  * Cross-platform support via Node.js-based hook scripts (.mjs).
  * Bash hook scripts were removed in v3.9.0.
  */
-import { existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, chmodSync, readdirSync, cpSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, chmodSync, readdirSync, cpSync, unlinkSync, rmSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir } from 'os';
@@ -19,6 +19,8 @@ import { resolveNodeBinary } from '../utils/resolve-node.js';
 import { parseFrontmatter } from '../utils/frontmatter.js';
 import { isSkininthegamebrosUser } from '../utils/skininthegamebros-user.js';
 import { syncUnifiedMcpRegistryTargets } from './mcp-registry.js';
+import { OMC_CONFIG_FILE_REL } from '../lib/paths.js';
+import { buildHudWrapper } from '../lib/hud-wrapper-template.js';
 /** Claude Code configuration directory */
 export const CLAUDE_CONFIG_DIR = getClaudeConfigDir();
 export const AGENTS_DIR = join(CLAUDE_CONFIG_DIR, 'agents');
@@ -191,7 +193,7 @@ function trimClaudeUserContent(content) {
  * (avoids circular dependency since auto-update imports from installer)
  */
 export function isHudEnabledInConfig() {
-    const configPath = join(CLAUDE_CONFIG_DIR, '.omc-config.json');
+    const configPath = join(CLAUDE_CONFIG_DIR, OMC_CONFIG_FILE_REL);
     if (!existsSync(configPath)) {
         return true; // default: enabled
     }
@@ -430,6 +432,203 @@ function mergeHookGroups(eventType, existingGroups, newOmcGroups, options, log, 
     }
     return existingGroups;
 }
+/**
+ * Remove stale OMC-created agent files from the config agents directory.
+ *
+ * When OMC drops an agent definition in a new version, the old .md file
+ * lingers in ~/.claude/agents/. This function compares the installed files
+ * against the current package's agent definitions and removes any that:
+ *   1. Are .md files (OMC agent naming convention)
+ *   2. Were previously shipped by OMC (match the frontmatter `name:` pattern)
+ *   3. No longer exist in the current package's agents/ directory
+ *
+ * User-created files (those whose filename does not match any historically
+ * known OMC agent) are preserved.
+ */
+export function cleanupStaleAgents(log) {
+    if (!existsSync(AGENTS_DIR))
+        return [];
+    const currentAgentFiles = new Set(Object.keys(loadAgentDefinitions()));
+    const removed = [];
+    for (const file of readdirSync(AGENTS_DIR)) {
+        if (!file.endsWith('.md'))
+            continue;
+        if (file === 'AGENTS.md')
+            continue;
+        if (currentAgentFiles.has(file))
+            continue;
+        // Check if this looks like an OMC-created agent (kebab-case .md with frontmatter)
+        const filepath = join(AGENTS_DIR, file);
+        try {
+            const content = readFileSync(filepath, 'utf-8');
+            if (content.startsWith('---\n') && /^name:\s+\S+/m.test(content)) {
+                unlinkSync(filepath);
+                removed.push(file);
+                log(`  Removed stale agent: ${file}`);
+            }
+        }
+        catch {
+            // Skip files that can't be read
+        }
+    }
+    return removed;
+}
+/**
+ * Remove standalone agent files that duplicate plugin-provided agents (#2252).
+ *
+ * When the plugin is the canonical agent source, standalone copies in
+ * ~/.claude/agents/ from a prior `omc setup` cause agent definitions to
+ * appear twice. Removes standalone copies with OMC frontmatter whose
+ * filename matches a current package agent.
+ */
+export function prunePluginDuplicateAgents(log) {
+    if (!existsSync(AGENTS_DIR))
+        return [];
+    const currentAgentFiles = new Set(Object.keys(loadAgentDefinitions()));
+    const removed = [];
+    for (const file of readdirSync(AGENTS_DIR)) {
+        if (!file.endsWith('.md'))
+            continue;
+        if (file === 'AGENTS.md')
+            continue;
+        // Only prune agents whose name matches a current package agent
+        if (!currentAgentFiles.has(file))
+            continue;
+        const filepath = join(AGENTS_DIR, file);
+        try {
+            const content = readFileSync(filepath, 'utf-8');
+            if (content.startsWith('---\n') && /^name:\s+\S+/m.test(content)) {
+                unlinkSync(filepath);
+                removed.push(file);
+                log(`  Pruned plugin-duplicate agent: ${file}`);
+            }
+        }
+        catch {
+            // Skip files that can't be read
+        }
+    }
+    return removed;
+}
+/**
+ * Remove stale OMC-created skill directories from the config skills directory.
+ *
+ * Similar to cleanupStaleAgents but for skill directories. Removes directories
+ * that contain a SKILL.md with OMC frontmatter but are no longer shipped by
+ * the current package version. User-created skills are preserved.
+ */
+export function cleanupStaleSkills(log) {
+    if (!existsSync(SKILLS_DIR))
+        return [];
+    const packageSkillsDir = join(getPackageDir(), 'skills');
+    const currentSkillNames = new Set();
+    if (existsSync(packageSkillsDir)) {
+        for (const entry of readdirSync(packageSkillsDir, { withFileTypes: true })) {
+            if (entry.isDirectory()) {
+                currentSkillNames.add(entry.name);
+                // Also add the safe standalone name variant
+                const skillMdPath = join(packageSkillsDir, entry.name, 'SKILL.md');
+                if (existsSync(skillMdPath)) {
+                    const content = readFileSync(skillMdPath, 'utf-8');
+                    const { metadata } = parseFrontmatter(content);
+                    if (typeof metadata.name === 'string' && metadata.name.trim().length > 0) {
+                        currentSkillNames.add(toSafeStandaloneSkillName(metadata.name));
+                    }
+                }
+            }
+        }
+    }
+    const removed = [];
+    for (const entry of readdirSync(SKILLS_DIR, { withFileTypes: true })) {
+        if (!entry.isDirectory())
+            continue;
+        if (currentSkillNames.has(entry.name))
+            continue;
+        const skillMdPath = join(SKILLS_DIR, entry.name, 'SKILL.md');
+        if (!existsSync(skillMdPath))
+            continue;
+        // Check if this looks like an OMC-created skill (has standard frontmatter)
+        try {
+            const content = readFileSync(skillMdPath, 'utf-8');
+            if (content.startsWith('---\n') && /^name:\s+\S+/m.test(content)) {
+                // Skip user-learned skills (these are user-created)
+                if (entry.name === 'omc-learned')
+                    continue;
+                rmSync(join(SKILLS_DIR, entry.name), { recursive: true, force: true });
+                removed.push(entry.name);
+                log(`  Removed stale skill: ${entry.name}/`);
+            }
+        }
+        catch {
+            // Skip directories that can't be read
+        }
+    }
+    return removed;
+}
+/**
+ * Remove standalone skill directories that duplicate plugin-provided skills.
+ *
+ * When the plugin is the canonical skill source, standalone copies in
+ * ~/.claude/skills/ from a prior `omc setup` cause every command to appear
+ * twice (#2252). This function removes standalone copies whose SKILL.md
+ * content-hashes match any installed plugin version, preserving user-authored
+ * skills that happen to share a name.
+ */
+export function prunePluginDuplicateSkills(log) {
+    if (!existsSync(SKILLS_DIR))
+        return [];
+    const packageSkillsDir = join(getPackageDir(), 'skills');
+    if (!existsSync(packageSkillsDir))
+        return [];
+    // Build set of plugin-provided skill names (both dir name and safe standalone name)
+    const pluginSkillNames = new Set();
+    // Build map of skill name → content hash from the package for safety comparison
+    const pluginSkillHashes = new Map();
+    for (const entry of readdirSync(packageSkillsDir, { withFileTypes: true })) {
+        if (!entry.isDirectory())
+            continue;
+        pluginSkillNames.add(entry.name);
+        const skillMdPath = join(packageSkillsDir, entry.name, 'SKILL.md');
+        if (existsSync(skillMdPath)) {
+            const content = readFileSync(skillMdPath, 'utf-8');
+            const { metadata } = parseFrontmatter(content);
+            if (typeof metadata.name === 'string' && metadata.name.trim().length > 0) {
+                pluginSkillNames.add(toSafeStandaloneSkillName(metadata.name));
+            }
+            // Store a simple content hash for safety comparison
+            pluginSkillHashes.set(entry.name, content.trim());
+        }
+    }
+    const removed = [];
+    for (const entry of readdirSync(SKILLS_DIR, { withFileTypes: true })) {
+        if (!entry.isDirectory())
+            continue;
+        if (entry.name === 'omc-learned' || entry.name === '.omc-trash')
+            continue;
+        // Only prune skills whose name matches a plugin-provided skill
+        if (!pluginSkillNames.has(entry.name))
+            continue;
+        const skillMdPath = join(SKILLS_DIR, entry.name, 'SKILL.md');
+        if (!existsSync(skillMdPath))
+            continue;
+        try {
+            const standaloneContent = readFileSync(skillMdPath, 'utf-8').trim();
+            // Safety check: only remove if the standalone content matches the plugin's
+            // copy (or looks like standard OMC frontmatter). This preserves user-authored
+            // skills that happen to share a name with a plugin skill.
+            const pluginContent = pluginSkillHashes.get(entry.name);
+            const isOmcCreated = standaloneContent.startsWith('---\n') && /^name:\s+\S+/m.test(standaloneContent);
+            if (pluginContent === standaloneContent || isOmcCreated) {
+                rmSync(join(SKILLS_DIR, entry.name), { recursive: true, force: true });
+                removed.push(entry.name);
+                log(`  Pruned plugin-duplicate skill: ${entry.name}/`);
+            }
+        }
+        catch {
+            // Skip directories that can't be read
+        }
+    }
+    return removed;
+}
 function directoryHasMarkdownFiles(directory) {
     if (!existsSync(directory)) {
         return false;
@@ -500,12 +699,20 @@ export function hasEnabledOmcPlugin() {
     }
     try {
         const settings = JSON.parse(readFileSync(SETTINGS_FILE, 'utf-8'));
-        const plugins = settings.plugins;
-        if (Array.isArray(plugins)) {
-            return plugins.some(plugin => typeof plugin === 'string' && plugin.toLowerCase().includes('oh-my-claudecode'));
-        }
-        if (plugins && typeof plugins === 'object') {
-            return Object.entries(plugins).some(([pluginId, value]) => pluginId.toLowerCase().includes('oh-my-claudecode') && value !== false);
+        // Prefer `enabledPlugins` (modern), fall back to `plugins` (legacy).
+        // Returning on the first hit short-circuits the check whenever we find
+        // an enabled OMC plugin entry in either field.
+        for (const candidate of [settings.enabledPlugins, settings.plugins]) {
+            if (Array.isArray(candidate)) {
+                if (candidate.some(plugin => typeof plugin === 'string' && plugin.toLowerCase().includes('oh-my-claudecode'))) {
+                    return true;
+                }
+            }
+            else if (candidate && typeof candidate === 'object') {
+                if (Object.entries(candidate).some(([pluginId, value]) => pluginId.toLowerCase().includes('oh-my-claudecode') && value !== false)) {
+                    return true;
+                }
+            }
         }
     }
     catch {
@@ -667,7 +874,7 @@ export function extractOmcVersionFromClaudeMd(content) {
  * the interactive setup wizard had been completed.
  */
 export function syncPersistedSetupVersion(options) {
-    const configPath = options?.configPath ?? join(CLAUDE_CONFIG_DIR, '.omc-config.json');
+    const configPath = options?.configPath ?? join(CLAUDE_CONFIG_DIR, OMC_CONFIG_FILE_REL);
     let config = {};
     if (existsSync(configPath)) {
         const rawConfig = readFileSync(configPath, 'utf-8').trim();
@@ -795,8 +1002,17 @@ export function install(options = {}) {
     const pluginProvidesAgentFiles = hasPluginProvidedAgentFiles();
     const pluginProvidesSkillFiles = hasPluginProvidedSkillFiles();
     const enabledOmcPlugin = hasEnabledOmcPlugin();
-    const shouldInstallLegacyAgents = !runningAsPlugin && !pluginProvidesAgentFiles;
-    const shouldInstallBundledSkills = options.noPlugin === true || !enabledOmcPlugin || !pluginProvidesSkillFiles;
+    // Dev plugin-dir mode: user launched OMC via `claude --plugin-dir <path>` or
+    // `omc --plugin-dir <path>`. The plugin already exposes agents/skills at runtime,
+    // so skip copying them into <configDir>. Auto-detected via OMC_PLUGIN_ROOT in CLI.
+    // `noPlugin` still wins (CLI enforces precedence and warns), so we ignore
+    // `pluginDirMode` whenever `noPlugin` is set.
+    const pluginDirMode = options.pluginDirMode === true && options.noPlugin !== true;
+    if (pluginDirMode) {
+        log('Dev plugin-dir mode: skipping agent/skill sync (plugin provides them via --plugin-dir)');
+    }
+    const shouldInstallLegacyAgents = !runningAsPlugin && !pluginProvidesAgentFiles && !pluginDirMode;
+    const shouldInstallBundledSkills = !pluginDirMode && (options.noPlugin === true || !enabledOmcPlugin || !pluginProvidesSkillFiles);
     const allowPluginHookRefresh = runningAsPlugin && options.refreshHooksInPlugin && !projectScoped;
     if (runningAsPlugin) {
         log('Detected Claude Code plugin context - skipping agent/command file installation');
@@ -843,7 +1059,7 @@ export function install(options = {}) {
                 mkdirSync(AGENTS_DIR, { recursive: true });
             }
             // NOTE: COMMANDS_DIR creation removed - commands/ deprecated in v4.1.16 (#582)
-            if (!existsSync(SKILLS_DIR)) {
+            if (shouldInstallBundledSkills && !existsSync(SKILLS_DIR)) {
                 mkdirSync(SKILLS_DIR, { recursive: true });
             }
             if (!existsSync(HOOKS_DIR)) {
@@ -866,6 +1082,18 @@ export function install(options = {}) {
             }
             else {
                 log('Skipping legacy agent file installation (plugin-provided agents are available)');
+                // Remove standalone copies that duplicate plugin-provided agents (#2252)
+                const prunedAgents = prunePluginDuplicateAgents(log);
+                if (prunedAgents.length > 0) {
+                    log(`Pruned ${prunedAgents.length} duplicate standalone agent(s)`);
+                }
+            }
+            // Clean up stale OMC-created agents from previous versions
+            if (existsSync(AGENTS_DIR)) {
+                const removedAgents = cleanupStaleAgents(log);
+                if (removedAgents.length > 0) {
+                    log(`Cleaned up ${removedAgents.length} stale agent(s)`);
+                }
             }
             // Skip command installation - all commands are now plugin-scoped skills
             // Commands are accessible via the plugin system (${CLAUDE_PLUGIN_ROOT}/commands/)
@@ -918,9 +1146,21 @@ export function install(options = {}) {
         }
         else if (pluginProvidesSkillFiles) {
             log('Skipping bundled skill installation (plugin-provided skills are available). Use --no-plugin to force local skill sync.');
+            // Remove standalone copies that duplicate plugin-provided skills (#2252)
+            const prunedSkills = prunePluginDuplicateSkills(log);
+            if (prunedSkills.length > 0) {
+                log(`Pruned ${prunedSkills.length} duplicate standalone skill(s)`);
+            }
         }
         else if (runningAsPlugin) {
             log('Skipping bundled skill installation (managed by plugin system)');
+        }
+        // Clean up stale OMC-created skills from previous versions
+        if (existsSync(SKILLS_DIR)) {
+            const removedSkills = cleanupStaleSkills(log);
+            if (removedSkills.length > 0) {
+                log(`Cleaned up ${removedSkills.length} stale skill(s)`);
+            }
         }
         // Install CLAUDE.md with merge support.
         // This runs regardless of plugin context so that `omc update` (which re-execs
@@ -980,191 +1220,12 @@ export function install(options = {}) {
                 if (!existsSync(HUD_DIR)) {
                     mkdirSync(HUD_DIR, { recursive: true });
                 }
-                // Build the HUD script content (compiled from src/hud/index.ts)
-                // Create a wrapper that checks multiple locations for the HUD module
+                // Build the HUD script content (compiled from src/hud/index.ts).
+                // The wrapper body is read by buildHudWrapper() in src/lib/hud-wrapper-template.ts —
+                // the single TS source of truth, mirrored by scripts/lib/hud-wrapper-template.mjs
+                // for scripts/plugin-setup.mjs. Drift enforced by hud-wrapper-template-sync.test.ts.
                 hudScriptPath = join(HUD_DIR, 'omc-hud.mjs').replace(/\\/g, '/');
-                const hudScriptLines = [
-                    '#!/usr/bin/env node',
-                    '/**',
-                    ' * OMC HUD - Statusline Script',
-                    ' * Wrapper that imports from dev paths, plugin cache, or npm package',
-                    ' */',
-                    '',
-                    'import { execFileSync } from "node:child_process";',
-                    'import { existsSync, readdirSync } from "node:fs";',
-                    'import { createRequire } from "node:module";',
-                    'import { homedir } from "node:os";',
-                    'import { dirname, join, resolve } from "node:path";',
-                    'import { fileURLToPath, pathToFileURL } from "node:url";',
-                    '',
-                    'const __filename = fileURLToPath(import.meta.url);',
-                    'const __dirname = dirname(__filename);',
-                    'const { getClaudeConfigDir } = await import(pathToFileURL(join(__dirname, "lib", "config-dir.mjs")).href);',
-                    '',
-                    'function uniquePaths(paths) {',
-                    '  return [...new Set(paths.filter(Boolean).map((candidate) => resolve(candidate)))];',
-                    '}',
-                    '',
-                    'function getGlobalNodeModuleRoots() {',
-                    '  const roots = [];',
-                    '  const addPrefixRoots = (prefix) => {',
-                    '    if (!prefix) return;',
-                    '    if (process.platform === "win32") {',
-                    '      roots.push(join(prefix, "node_modules"));',
-                    '      return;',
-                    '    }',
-                    '    roots.push(join(prefix, "lib", "node_modules"));',
-                    '    roots.push(join(prefix, "node_modules"));',
-                    '  };',
-                    '',
-                    '  addPrefixRoots(process.env.npm_config_prefix);',
-                    '  addPrefixRoots(process.env.PREFIX);',
-                    '',
-                    '  const nodeBinDir = dirname(process.execPath);',
-                    '  roots.push(join(nodeBinDir, "node_modules"));',
-                    '  roots.push(join(nodeBinDir, "..", "node_modules"));',
-                    '  roots.push(join(nodeBinDir, "..", "lib", "node_modules"));',
-                    '',
-                    '  if (process.platform === "win32" && process.env.APPDATA) {',
-                    '    roots.push(join(process.env.APPDATA, "npm", "node_modules"));',
-                    '  }',
-                    '',
-                    '  try {',
-                    '    const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";',
-                    '    const npmRoot = String(execFileSync(npmCommand, ["root", "-g"], {',
-                    '      encoding: "utf8",',
-                    '      stdio: ["ignore", "pipe", "ignore"],',
-                    '      timeout: 1500,',
-                    '    })).trim();',
-                    '    if (npmRoot) roots.unshift(npmRoot);',
-                    '  } catch { /* continue */ }',
-                    '',
-                    '  return uniquePaths(roots);',
-                    '}',
-                    '',
-                    'async function importHudPackage(hudPackage) {',
-                    '  try {',
-                    '    const wrapperRequire = createRequire(import.meta.url);',
-                    '    const resolvedHudPath = wrapperRequire.resolve(hudPackage);',
-                    '    await import(pathToFileURL(resolvedHudPath).href);',
-                    '    return true;',
-                    '  } catch { /* continue */ }',
-                    '',
-                    '  try {',
-                    '    const cwdRequire = createRequire(join(process.cwd(), "__omc_hud__.cjs"));',
-                    '    const resolvedHudPath = cwdRequire.resolve(hudPackage);',
-                    '    await import(pathToFileURL(resolvedHudPath).href);',
-                    '    return true;',
-                    '  } catch { /* continue */ }',
-                    '',
-                    '  for (const nodeModulesRoot of getGlobalNodeModuleRoots()) {',
-                    '    const resolvedHudPath = join(nodeModulesRoot, hudPackage);',
-                    '    if (!existsSync(resolvedHudPath)) continue;',
-                    '    try {',
-                    '      await import(pathToFileURL(resolvedHudPath).href);',
-                    '      return true;',
-                    '    } catch { /* continue */ }',
-                    '  }',
-                    '',
-                    '  return false;',
-                    '}',
-                    '',
-                    'async function main() {',
-                    '  const home = homedir();',
-                    '  let pluginCacheVersion = null;',
-                    '  let pluginCacheDir = null;',
-                    '  ',
-                    '  // 1. Development paths (only when OMC_DEV=1)',
-                    '  if (process.env.OMC_DEV === "1") {',
-                    '    const devPaths = [',
-                    '      join(home, "Workspace/oh-my-claudecode/dist/hud/index.js"),',
-                    '      join(home, "workspace/oh-my-claudecode/dist/hud/index.js"),',
-                    '      join(home, "projects/oh-my-claudecode/dist/hud/index.js"),',
-                    '    ];',
-                    '    ',
-                    '    for (const devPath of devPaths) {',
-                    '      if (existsSync(devPath)) {',
-                    '        try {',
-                    '          await import(pathToFileURL(devPath).href);',
-                    '          return;',
-                    '        } catch { /* continue */ }',
-                    '      }',
-                    '    }',
-                    '  }',
-                    '  ',
-                    '  // 2. Plugin cache (for production installs)',
-                    '  // Respect CLAUDE_CONFIG_DIR so installs under a custom config dir are found',
-                    '  const configDir = getClaudeConfigDir();',
-                    '  const pluginCacheBase = join(configDir, "plugins", "cache", "omc", "oh-my-claudecode");',
-                    '  if (existsSync(pluginCacheBase)) {',
-                    '    try {',
-                    '      const versions = readdirSync(pluginCacheBase);',
-                    '      if (versions.length > 0) {',
-                    '        const sortedVersions = versions.sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).reverse();',
-                    '        const latestInstalledVersion = sortedVersions[0];',
-                    '        pluginCacheVersion = latestInstalledVersion;',
-                    '        pluginCacheDir = join(pluginCacheBase, latestInstalledVersion);',
-                    '        ',
-                    '        // Filter to only versions with built dist/hud/index.js',
-                    '        // This prevents picking an unbuilt new version after plugin update',
-                    '        const builtVersions = sortedVersions.filter(version => {',
-                    '          const pluginPath = join(pluginCacheBase, version, "dist/hud/index.js");',
-                    '          return existsSync(pluginPath);',
-                    '        });',
-                    '        ',
-                    '        if (builtVersions.length > 0) {',
-                    '          const latestVersion = builtVersions[0];',
-                    '          pluginCacheVersion = latestVersion;',
-                    '          pluginCacheDir = join(pluginCacheBase, latestVersion);',
-                    '          const pluginPath = join(pluginCacheDir, "dist/hud/index.js");',
-                    '          await import(pathToFileURL(pluginPath).href);',
-                    '          return;',
-                    '        }',
-                    '      }',
-                    '    } catch { /* continue */ }',
-                    '  }',
-                    '  ',
-                    '  // 3. Marketplace clone (for marketplace installs without a populated cache)',
-                    '  const marketplaceHudPath = join(configDir, "plugins", "marketplaces", "omc", "dist/hud/index.js");',
-                    '  if (existsSync(marketplaceHudPath)) {',
-                    '    try {',
-                    '      await import(pathToFileURL(marketplaceHudPath).href);',
-                    '      return;',
-                    '    } catch { /* continue */ }',
-                    '  }',
-                    '  ',
-                    '  // 4. npm package (current project, global install, or branded fallback)',
-                    '  const npmHudPackages = [',
-                    '    "oh-my-claude-sisyphus/dist/hud/index.js",',
-                    '    "oh-my-claudecode/dist/hud/index.js",',
-                    '  ];',
-                    '  for (const hudPackage of npmHudPackages) {',
-                    '    if (await importHudPackage(hudPackage)) {',
-                    '      return;',
-                    '    }',
-                    '  }',
-                    '  ',
-                    '  // 5. Fallback: provide detailed error message with fix instructions',
-                    '  if (pluginCacheDir && existsSync(pluginCacheDir)) {',
-                    '    // Plugin exists but HUD could not be loaded',
-                    '    const distDir = join(pluginCacheDir, "dist");',
-                    '    if (!existsSync(distDir)) {',
-                    '      console.log(`[OMC HUD] Plugin installed but not built. Run: cd "${pluginCacheDir}" && npm install && npm run build`);',
-                    '    } else {',
-                    '      console.log(`[OMC HUD] Plugin HUD load failed. Run: cd "${pluginCacheDir}" && npm install && npm run build`);',
-                    '    }',
-                    '  } else if (existsSync(pluginCacheBase)) {',
-                    '    // Plugin cache directory exists but no versions',
-                    '    console.log(`[OMC HUD] Plugin cache found but no versions installed. Run: /oh-my-claudecode:omc-setup`);',
-                    '  } else {',
-                    '    // No plugin installation found at all',
-                    '    console.log("[OMC HUD] Plugin not installed. Run: /oh-my-claudecode:omc-setup");',
-                    '  }',
-                    '}',
-                    '',
-                    'main();',
-                ];
-                const hudScript = hudScriptLines.join('\n');
+                const hudScript = buildHudWrapper(getPackageDir());
                 writeFileSync(hudScriptPath, hudScript);
                 if (!isWindows()) {
                     chmodSync(hudScriptPath, 0o755);
@@ -1301,7 +1362,7 @@ export function install(options = {}) {
                 //    find-node.sh (used in hooks/hooks.json) can locate it at hook runtime
                 //    even when node is not on PATH (nvm/fnm users, issue #892).
                 try {
-                    const configPath = join(CLAUDE_CONFIG_DIR, '.omc-config.json');
+                    const configPath = join(CLAUDE_CONFIG_DIR, OMC_CONFIG_FILE_REL);
                     let omcConfig = {};
                     if (existsSync(configPath)) {
                         omcConfig = JSON.parse(readFileSync(configPath, 'utf-8'));

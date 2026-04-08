@@ -48,6 +48,15 @@ export interface InstallOptions {
     refreshHooksInPlugin?: boolean;
     skipHud?: boolean;
     noPlugin?: boolean;
+    /**
+     * Dev plugin-dir mode: skip copying agents and bundled skills into
+     * `<configDir>` because the user is launching OMC via
+     * `claude --plugin-dir <path>` (or `omc --plugin-dir <path>`) and the
+     * plugin already provides them at runtime. HUD, hooks, CLAUDE.md, and
+     * `.omc-config.json` are still installed. Mutually exclusive with
+     * `noPlugin` (the CLI gives `noPlugin` precedence).
+     */
+    pluginDirMode?: boolean;
 }
 /**
  * Read hudEnabled from .omc-config.json without importing auto-update
@@ -115,6 +124,47 @@ export declare function isRunningAsPlugin(): boolean;
  * @returns true if running as a project-scoped plugin, false otherwise
  */
 export declare function isProjectScopedPlugin(): boolean;
+/**
+ * Remove stale OMC-created agent files from the config agents directory.
+ *
+ * When OMC drops an agent definition in a new version, the old .md file
+ * lingers in ~/.claude/agents/. This function compares the installed files
+ * against the current package's agent definitions and removes any that:
+ *   1. Are .md files (OMC agent naming convention)
+ *   2. Were previously shipped by OMC (match the frontmatter `name:` pattern)
+ *   3. No longer exist in the current package's agents/ directory
+ *
+ * User-created files (those whose filename does not match any historically
+ * known OMC agent) are preserved.
+ */
+export declare function cleanupStaleAgents(log: (msg: string) => void): string[];
+/**
+ * Remove standalone agent files that duplicate plugin-provided agents (#2252).
+ *
+ * When the plugin is the canonical agent source, standalone copies in
+ * ~/.claude/agents/ from a prior `omc setup` cause agent definitions to
+ * appear twice. Removes standalone copies with OMC frontmatter whose
+ * filename matches a current package agent.
+ */
+export declare function prunePluginDuplicateAgents(log: (msg: string) => void): string[];
+/**
+ * Remove stale OMC-created skill directories from the config skills directory.
+ *
+ * Similar to cleanupStaleAgents but for skill directories. Removes directories
+ * that contain a SKILL.md with OMC frontmatter but are no longer shipped by
+ * the current package version. User-created skills are preserved.
+ */
+export declare function cleanupStaleSkills(log: (msg: string) => void): string[];
+/**
+ * Remove standalone skill directories that duplicate plugin-provided skills.
+ *
+ * When the plugin is the canonical skill source, standalone copies in
+ * ~/.claude/skills/ from a prior `omc setup` cause every command to appear
+ * twice (#2252). This function removes standalone copies whose SKILL.md
+ * content-hashes match any installed plugin version, preserving user-authored
+ * skills that happen to share a name.
+ */
+export declare function prunePluginDuplicateSkills(log: (msg: string) => void): string[];
 export declare function getInstalledOmcPluginRoots(): string[];
 /**
  * Detect whether an installed Claude Code plugin already provides OMC agent
