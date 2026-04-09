@@ -22,8 +22,23 @@ Capture a successful multi-step workflow as a concrete skill draft instead of re
    - a repo built-in skill
    - a user/project learned skill
    - documentation only
-4. Draft the SKILL.md content with clear triggers, steps, and success criteria.
-5. Point out anything still too fuzzy to encode safely.
+4. When drafting a file-backed skill, output a complete `SKILL.md` that starts with YAML frontmatter.
+   - Never emit plain markdown-only skill files.
+   - Minimum frontmatter:
+     ```yaml
+     ---
+     name: <skill-name>
+     description: <one-line description>
+     triggers:
+       - <trigger-1>
+       - <trigger-2>
+     ---
+     ```
+   - Write learned/user/project skills to:
+     - `${CLAUDE_CONFIG_DIR:-~/.claude}/skills/omc-learned/<skill-name>/SKILL.md`
+     - `.omc/skills/<skill-name>/SKILL.md`
+5. Draft the rest of the `SKILL.md` content with clear triggers, steps, and success criteria.
+6. Point out anything still too fuzzy to encode safely.
 
 ## Rules
 - Only capture workflows that are actually repeatable.
