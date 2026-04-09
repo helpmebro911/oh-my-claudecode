@@ -1075,6 +1075,18 @@ async function checkUltrawork(
     };
   }
 
+  // If all tracked work is complete, auto-deactivate ultrawork and allow exit.
+  // Issue #2419: otherwise the Stop hook can keep blocking even after task
+  // completion, leaving ultrawork active until manual /cancel or session-end.
+  if (!_hasIncompleteTodos) {
+    deactivateUltrawork(workingDir, sessionId);
+    return {
+      shouldBlock: false,
+      message: '[ULTRAWORK COMPLETE] No incomplete tasks remain. Ultrawork state cleared.',
+      mode: 'none'
+    };
+  }
+
   // Enforce hard max iterations for ultrawork (mirrors ralph enforcement).
   const hardMax = getHardMaxIterations();
   if (hardMax > 0 && state.reinforcement_count >= hardMax) {
@@ -1087,8 +1099,8 @@ async function checkUltrawork(
     };
   }
 
-  // Reinforce ultrawork mode - ALWAYS continue while active.
-  // This prevents false stops from bash errors, transient failures, etc.
+  // Reinforce ultrawork mode while incomplete work remains.
+  // This prevents false stops from bash errors or transient failures mid-task.
   const newState = incrementReinforcement(workingDir, sessionId);
   if (!newState) {
     return null;
@@ -1304,8 +1316,10 @@ export async function checkPersistentModes(
   }
 
   // Priority 2: Ultrawork Mode (performance mode with persistence)
+  // Return any non-null result so completion-triggered auto-deactivation can
+  // cleanly allow Stop instead of being dropped on the floor.
   const ultraworkResult = await checkUltrawork(sessionId, workingDir, hasIncompleteTodos, cancelInProgress);
-  if (ultraworkResult?.shouldBlock) {
+  if (ultraworkResult) {
     return ultraworkResult;
   }
 

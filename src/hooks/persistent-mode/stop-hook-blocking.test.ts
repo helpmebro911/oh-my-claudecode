@@ -151,6 +151,19 @@ describe("Stop Hook Blocking Contract", () => {
       const sessionId = "ultrawork-stale-awaiting-confirmation";
       const sessionDir = join(tempDir, ".omc", "state", "sessions", sessionId);
       mkdirSync(sessionDir, { recursive: true });
+      mkdirSync(join(tempDir, '.claude'), { recursive: true });
+      writeFileSync(
+        join(tempDir, '.claude', 'todos.json'),
+        JSON.stringify({
+          todos: [
+            {
+              content: 'resume the queued task',
+              status: 'pending',
+              priority: 'high'
+            }
+          ]
+        }),
+      );
       writeFileSync(
         join(sessionDir, "ultrawork-state.json"),
         JSON.stringify({
@@ -175,6 +188,19 @@ describe("Stop Hook Blocking Contract", () => {
       const sessionId = "ultrawork-fresh-last-checked-still-stale-confirmation";
       const sessionDir = join(tempDir, ".omc", "state", "sessions", sessionId);
       mkdirSync(sessionDir, { recursive: true });
+      mkdirSync(join(tempDir, '.claude'), { recursive: true });
+      writeFileSync(
+        join(tempDir, '.claude', 'todos.json'),
+        JSON.stringify({
+          todos: [
+            {
+              content: 'resume the queued task',
+              status: 'pending',
+              priority: 'high'
+            }
+          ]
+        }),
+      );
       writeFileSync(
         join(sessionDir, "ultrawork-state.json"),
         JSON.stringify({
@@ -193,9 +219,22 @@ describe("Stop Hook Blocking Contract", () => {
       expect(result.mode).toBe("ultrawork");
     });
 
-    it("blocks stop for active ultrawork (shouldBlock: true -> continue: false)", async () => {
+    it("blocks stop for active ultrawork while incomplete work remains (shouldBlock: true -> continue: false)", async () => {
       const sessionId = "test-session-block";
       activateUltrawork("Fix the bug", sessionId, tempDir);
+      mkdirSync(join(tempDir, '.claude'), { recursive: true });
+      writeFileSync(
+        join(tempDir, '.claude', 'todos.json'),
+        JSON.stringify({
+          todos: [
+            {
+              content: 'finish the bug fix',
+              status: 'pending',
+              priority: 'high'
+            }
+          ]
+        }),
+      );
 
       const result = await checkPersistentModes(sessionId, tempDir);
       expect(result.shouldBlock).toBe(true);
@@ -203,6 +242,23 @@ describe("Stop Hook Blocking Contract", () => {
       const output = createHookOutput(result);
       expect(output.continue).toBe(false);
       expect(output.message).toBeDefined();
+    });
+
+    it("auto-deactivates ultrawork and allows stop when all tracked work is complete", async () => {
+      const sessionId = "test-session-complete";
+      activateUltrawork("Task complete", sessionId, tempDir);
+      const statePath = join(tempDir, '.omc', 'state', 'sessions', sessionId, 'ultrawork-state.json');
+
+      const result = await checkPersistentModes(sessionId, tempDir);
+      expect(result.shouldBlock).toBe(false);
+      expect(result.mode).toBe('none');
+      expect(result.message).toContain('ULTRAWORK COMPLETE');
+
+      const output = createHookOutput(result);
+      expect(output.continue).toBe(true);
+      expect(output.message).toContain('ULTRAWORK COMPLETE');
+
+      expect(() => readFileSync(statePath, 'utf-8')).toThrow();
     });
 
     it("allows stop for deactivated ultrawork (shouldBlock: false -> continue: true)", async () => {
@@ -933,6 +989,35 @@ describe("Stop Hook Blocking Contract", () => {
       expect(output.continue).toBe(true);
     });
 
+    it("auto-deactivates ultrawork state when no incomplete work remains in cjs script", () => {
+      const sessionId = "ulw-complete-cjs";
+      const sessionDir = join(tempDir, ".omc", "state", "sessions", sessionId);
+      mkdirSync(sessionDir, { recursive: true });
+      const statePath = join(sessionDir, "ultrawork-state.json");
+      writeFileSync(
+        statePath,
+        JSON.stringify({
+          active: true,
+          session_id: sessionId,
+          reinforcement_count: 2,
+          max_reinforcements: 50,
+          started_at: new Date().toISOString(),
+          last_checked_at: new Date().toISOString(),
+          project_path: tempDir,
+        })
+      );
+
+      const output = runScript({
+        directory: tempDir,
+        sessionId,
+      });
+      expect(output.continue).toBe(true);
+
+      const updatedState = JSON.parse(readFileSync(statePath, "utf-8"));
+      expect(updatedState.active).toBe(false);
+      expect(updatedState.deactivated_reason).toBe("task_completion");
+    });
+
     it("deactivates ultrawork state when max reinforcements reached", () => {
       const sessionId = "ulw-max-reinforce-cjs";
       const sessionDir = join(tempDir, ".omc", "state", "sessions", sessionId);
@@ -949,6 +1034,20 @@ describe("Stop Hook Blocking Contract", () => {
           last_checked_at: new Date().toISOString(),
           project_path: tempDir,
         })
+      );
+
+      mkdirSync(join(tempDir, '.claude'), { recursive: true });
+      writeFileSync(
+        join(tempDir, '.claude', 'todos.json'),
+        JSON.stringify({
+          todos: [
+            {
+              content: 'keep working',
+              status: 'pending',
+              priority: 'high'
+            }
+          ]
+        }),
       );
 
       const output = runScript({

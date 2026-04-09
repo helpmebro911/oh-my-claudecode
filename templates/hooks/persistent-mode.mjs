@@ -1007,6 +1007,19 @@ async function main() {
         : !ultrawork.state.session_id || ultrawork.state.session_id === sessionId) &&
       isStateForCurrentProject(ultrawork.state, directory, ultrawork.isGlobal)
     ) {
+      if (totalIncomplete === 0) {
+        // Issue #2419: once tracked work is complete, auto-clear ultrawork so
+        // Stop can exit cleanly instead of forcing repeated cancel prompts.
+        try {
+          ultrawork.state.active = false;
+          ultrawork.state.deactivated_reason = 'task_completion';
+          ultrawork.state.last_checked_at = new Date().toISOString();
+          writeJsonFile(ultrawork.path, ultrawork.state);
+        } catch { /* best-effort cleanup */ }
+        console.log(JSON.stringify({ continue: true, suppressOutput: true }));
+        return;
+      }
+
       const newCount = (ultrawork.state.reinforcement_count || 0) + 1;
       const maxReinforcements = ultrawork.state.max_reinforcements || 50;
 
