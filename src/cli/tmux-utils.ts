@@ -208,9 +208,6 @@ export function resolveLaunchPolicy(
   if (args.some((arg) => arg === '--print' || arg === '-p')) {
     return 'direct';
   }
-  if (!isTmuxAvailable()) {
-    return 'direct';
-  }
   if (env.TMUX) return 'inside-tmux';
   // Terminal emulators that embed their own multiplexer (e.g. cmux, a
   // Ghostty-based terminal) set CMUX_SURFACE_ID but not TMUX.  tmux
@@ -218,6 +215,9 @@ export function resolveLaunchPolicy(
   // not directly compatible, leaving orphaned detached sessions.
   // Fall back to direct mode so Claude launches without tmux wrapping.
   if (env.CMUX_SURFACE_ID) return 'direct';
+  if (!isTmuxAvailable()) {
+    return 'direct';
+  }
   return 'outside-tmux';
 }
 
