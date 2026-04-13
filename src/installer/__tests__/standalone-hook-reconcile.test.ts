@@ -223,8 +223,9 @@ describe('install() plugin-provided hook deduplication (#2252)', () => {
   });
 
   it('removes stale OMC hook entries from settings.json when plugin provides hooks', async () => {
+    setupPluginWithHooks();
+
     // Pre-populate settings.json with stale OMC hook entries (simulating prior standalone install)
-    mkdirSync(testClaudeDir, { recursive: true });
     writeFileSync(join(testClaudeDir, 'settings.json'), JSON.stringify({
       enabledPlugins: { 'oh-my-claudecode': true },
       hooks: {
@@ -247,7 +248,10 @@ describe('install() plugin-provided hook deduplication (#2252)', () => {
       },
     }, null, 2));
 
-    setupPluginWithHooks();
+    const staleSettings = JSON.parse(
+      readFileSync(join(testClaudeDir, 'settings.json'), 'utf-8'),
+    ) as { hooks?: Record<string, unknown> };
+    expect(staleSettings.hooks).toBeDefined();
 
     const { install } = await loadInstaller();
     const result = install({ force: true, skipClaudeCheck: true });
