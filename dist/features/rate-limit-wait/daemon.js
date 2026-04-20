@@ -314,10 +314,7 @@ async function pollLoop(config) {
             }
             // If currently rate limited, scan for blocked panes
             if (isNowLimited && isTmuxAvailable()) {
-                const scanReason = rateLimitStatus?.isLimited
-                    ? 'Rate limited - scanning for blocked panes'
-                    : 'Usage API degraded (429/stale cache) - scanning for blocked panes';
-                log(scanReason, config);
+                log('Rate limited - scanning for blocked panes', config);
                 const blockedPanes = scanForBlockedPanes(config.paneLinesToCapture, dirname(config.stateFilePath));
                 // Add newly detected blocked panes
                 for (const pane of blockedPanes) {

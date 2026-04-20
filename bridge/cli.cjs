@@ -81995,7 +81995,7 @@ function isRateLimitStatusDegraded(status) {
   return status?.apiErrorReason === "rate_limited";
 }
 function shouldMonitorBlockedPanes(status) {
-  return !!status && (status.isLimited || isRateLimitStatusDegraded(status));
+  return !!status?.isLimited;
 }
 
 // src/features/rate-limit-wait/index.ts
@@ -82251,8 +82251,7 @@ async function pollLoop2(config2) {
         log2("Rate limit status unavailable (no OAuth credentials?)", config2);
       }
       if (isNowLimited && isTmuxAvailable2()) {
-        const scanReason = rateLimitStatus?.isLimited ? "Rate limited - scanning for blocked panes" : "Usage API degraded (429/stale cache) - scanning for blocked panes";
-        log2(scanReason, config2);
+        log2("Rate limited - scanning for blocked panes", config2);
         const blockedPanes = scanForBlockedPanes(config2.paneLinesToCapture, (0, import_path113.dirname)(config2.stateFilePath));
         for (const pane of blockedPanes) {
           const existing = state.blockedPanes.find((p) => p.id === pane.id);
