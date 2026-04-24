@@ -401,9 +401,11 @@ function canonicalizeWorkers(workers) {
       role: backfillText(winner.role, loser.role) ?? winner.role,
       worker_cli: backfillText(winner.worker_cli, loser.worker_cli),
       working_dir: backfillText(winner.working_dir, loser.working_dir),
+      worktree_repo_root: backfillText(winner.worktree_repo_root, loser.worktree_repo_root),
       worktree_path: backfillText(winner.worktree_path, loser.worktree_path),
       worktree_branch: backfillText(winner.worktree_branch, loser.worktree_branch),
       worktree_detached: backfillBoolean(winner.worktree_detached, loser.worktree_detached),
+      worktree_created: backfillBoolean(winner.worktree_created, loser.worktree_created),
       team_state_root: backfillText(winner.team_state_root, loser.team_state_root)
     });
   }
@@ -6878,6 +6880,13 @@ async function monitorTeamV2(teamName, cwd) {
       status,
       heartbeat,
       assignedTasks: w.assigned_tasks,
+      working_dir: w.working_dir,
+      worktree_repo_root: w.worktree_repo_root,
+      worktree_path: w.worktree_path,
+      worktree_branch: w.worktree_branch,
+      worktree_detached: w.worktree_detached,
+      worktree_created: w.worktree_created,
+      team_state_root: w.team_state_root,
       turnsWithoutProgress
     });
     if (!alive) {
@@ -8518,16 +8527,10 @@ async function teamStatusByTeamName(teamName, cwd = process.cwd()) {
       workerPaneIds: Array.from(new Set(
         (config?.workers ?? []).map((worker) => worker.pane_id).filter((paneId) => typeof paneId === "string" && paneId.trim().length > 0)
       )),
-      workers: (config?.workers ?? []).map((worker) => ({
-        name: worker.name,
-        working_dir: worker.working_dir,
-        worktree_repo_root: worker.worktree_repo_root,
-        worktree_path: worker.worktree_path,
-        worktree_branch: worker.worktree_branch,
-        worktree_detached: worker.worktree_detached,
-        worktree_created: worker.worktree_created,
-        team_state_root: worker.team_state_root
-      })),
+      workspaceMode: config?.workspace_mode,
+      worktreeMode: config?.worktree_mode,
+      teamStateRoot: config?.team_state_root,
+      workers: config?.workers ?? [],
       snapshot: snapshot2
     };
   }
@@ -8679,9 +8682,9 @@ Examples:
   omc team api list-tasks --input '{"teamName":"auth-review"}' --json
   omc team 3:codex "refactor launch command"
 
-Worktree mode:
-  Native worker worktrees are opt-in/config-gated for runtime-v2.
-  Status surfaces workspace_mode, worktree_mode, team_state_root, and worker worktree metadata when enabled.
+Notes:
+  Native team worktree mode is opt-in/config-gated during rollout.
+  team status JSON includes workspace mode, canonical state root, and worker worktree metadata when present.
 `.trim();
 function parseStartArgs(args) {
   const agentValues = [];
